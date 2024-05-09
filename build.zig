@@ -4,8 +4,8 @@ const builtin = @import("builtin");
 const rt = @import("test/runtime_test.zig");
 const RuntimeStep = rt.RuntimeStep;
 const Allocator = std.mem.Allocator;
-const Builder = std.build.Builder;
-const Step = std.build.Step;
+const Builder = std.Build;
+const Step = Builder.Step;
 const Target = std.Target;
 const CrossTarget = std.zig.CrossTarget;
 const fs = std.fs;
@@ -14,25 +14,28 @@ const Mode = std.builtin.Mode;
 const TestMode = rt.TestMode;
 const ArrayList = std.ArrayList;
 const Fat32 = @import("mkfat32.zig").Fat32;
+const ExecutableOptions = Builder.ExecutableOptions;
 
 const x86_i686 = CrossTarget{
-    .cpu_arch = .i386,
+    .cpu_arch = .x86,
     .os_tag = .freestanding,
-    .cpu_model = .{ .explicit = &Target.x86.cpu._i686 },
+    .cpu_model = .{ .explicit = &Target.x86.cpu.i686 },
 };
 
 pub fn build(b: *Builder) !void {
     const target = b.standardTargetOptions(.{ .whitelist = &[_]CrossTarget{x86_i686}, .default_target = x86_i686 });
-    const arch = switch (target.getCpuArch()) {
-        .i386 => "x86",
+    const arch = switch (target.result.cpu.arch) {
+        .x86 => "x86",
         else => unreachable,
     };
 
-    const fmt_step = b.addFmt(&[_][]const u8{
-        "build.zig",
-        "mkfat32.zig",
-        "src",
-        "test",
+    const fmt_step = b.addFmt(Step.Fmt.Options{
+        .paths = &[_][]const u8{
+            "build.zig",
+            "mkfat32.zig",
+            "src",
+            "test",
+        },
     });
     b.default_step.dependOn(&fmt_step.step);
 
@@ -47,29 +50,37 @@ pub fn build(b: *Builder) !void {
     const fat32_image_path = try fs.path.join(b.allocator, &[_][]const u8{ b.install_path, "fat32.img" });
     const test_fat32_image_path = try fs.path.join(b.allocator, &[_][]const u8{ "test", "fat32", "test_fat32.img" });
 
-    const build_mode = b.standardReleaseOptions();
-    comptime var test_mode_desc: []const u8 = "\n                         ";
+    const optimize = b.standardOptimizeOption(.{});
+    comptime var test_mode_desc: []const u8 = "\n";
+
     inline for (@typeInfo(TestMode).Enum.fields) |field| {
-        const tm = @field(TestMode, field.name);
-        test_mode_desc = test_mode_desc ++ field.name ++ " (" ++ TestMode.getDescription(tm) ++ ")";
-        test_mode_desc = test_mode_desc ++ "\n                         ";
+        test_mode_desc = test_mode_desc ++ field.name ++ "\n";
     }
 
     const test_mode = b.option(TestMode, "test-mode", "Run a specific runtime test. This option is for the rt-test step. Available options: " ++ test_mode_desc) orelse .None;
     const disable_display = b.option(bool, "disable-display", "Disable the qemu window") orelse false;
 
-    const exec = b.addExecutable("pluto.elf", main_src);
+    const exec = b.addExecutable(ExecutableOptions{
+        .name = "pluto",
+        .optimize = optimize,
+        .target = target,
+    });
     const exec_output_path = try fs.path.join(b.allocator, &[_][]const u8{ b.install_path, "pluto.elf" });
-    exec.setOutputDir(b.install_path);
-    const exec_options = b.addOptions();
-    exec.addOptions("build_options", exec_options);
-    exec_options.addOption(TestMode, "test_mode", test_mode);
-    exec.setBuildMode(build_mode);
-    exec.setLinkerScriptPath(std.build.FileSource{ .path = linker_script_path });
-    exec.setTarget(target);
+    exec.out_filename = exec_output_path;
 
-    const make_iso = switch (target.getCpuArch()) {
-        .i386 => b.addSystemCommand(&[_][]const u8{ "./makeiso.sh", boot_path, modules_path, iso_dir_path, exec_output_path, ramdisk_path, output_iso }),
+    //const exec_options = Step.Options.create(b);
+    //b.addOptions();
+    //exec.addOptions("build_options", exec_options);
+    //exec_options.addOption(TestMode, "test_mode", test_mode);
+    //exec.setBuildMode(optimize);
+    exec.setLinkerScriptPath(.{ .path = linker_script_path });
+    //exec.setTarget(target);
+
+    std.debug.print("Arch: {}\n", .{target.result.cpu.arch});
+    std.debug.print("Arch: {}\n", .{target.result.cpu.arch.genericName()});
+
+    const make_iso = switch (target.result.cpu.arch) {
+        .x86 => b.addSystemCommand(&[_][]const u8{ "./makeiso.sh", boot_path, modules_path, iso_dir_path, exec_output_path, ramdisk_path, output_iso }),
         else => unreachable,
     };
     make_iso.step.dependOn(&exec.step);
@@ -87,41 +98,53 @@ pub fn build(b: *Builder) !void {
     } else if (test_mode == .Scheduler) {
         inline for (&[_][]const u8{ "user_program_data", "user_program" }) |user_program| {
             // Add some test files for the user mode runtime tests
-            const user_program_step = b.addExecutable(user_program ++ ".elf", null);
+
+            const options = ExecutableOptions{
+                .name = user_program ++ ".elf",
+                .optimize = optimize,
+                .target = target,
+            };
+
+            const user_program_step = b.addExecutable(options);
             user_program_step.setLinkerScriptPath(.{ .path = "test/user_program.ld" });
-            user_program_step.addAssemblyFile("test/" ++ user_program ++ ".s");
-            user_program_step.setOutputDir(b.install_path);
-            user_program_step.setTarget(target);
-            user_program_step.setBuildMode(build_mode);
-            user_program_step.strip = true;
+            user_program_step.addAssemblyFile(.{ .path = "test/" ++ user_program ++ ".s" });
+            user_program_step.out_filename = try fs.path.join(b.allocator, &[_][]const u8{ b.install_path, user_program ++ ".elf" });
+            // user_program_step.strip = true;
             exec.step.dependOn(&user_program_step.step);
             const user_program_path = try std.mem.join(b.allocator, "/", &[_][]const u8{ b.install_path, user_program ++ ".elf" });
             try ramdisk_files_al.append(user_program_path);
         }
     }
 
-    const ramdisk_step = RamdiskStep.create(b, target, ramdisk_files_al.toOwnedSlice(), ramdisk_path);
+    const ramdisk_slice = ramdisk_files_al.toOwnedSlice() catch unreachable;
+
+    const ramdisk_step = RamdiskStep.create(b, target.query, ramdisk_slice, ramdisk_path);
     make_iso.step.dependOn(&ramdisk_step.step);
 
     b.default_step.dependOn(&make_iso.step);
 
     const test_step = b.step("test", "Run tests");
-    const unit_tests = b.addTest(main_src);
-    unit_tests.setBuildMode(build_mode);
-    unit_tests.setMainPkgPath(".");
+    const unit_options = Builder.TestOptions{
+        .name = "unit_tests",
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = .{ .path = main_src },
+    };
+    const unit_tests = b.addTest(unit_options);
     const unit_test_options = b.addOptions();
-    unit_tests.addOptions("build_options", unit_test_options);
+    //unit_tests.addOptions("build_options", unit_test_options);
     unit_test_options.addOption(TestMode, "test_mode", test_mode);
-    unit_tests.setTarget(.{ .cpu_arch = target.cpu_arch });
 
     if (builtin.os.tag != .windows) {
         b.enable_qemu = true;
     }
 
     // Run the mock gen
-    const mock_gen = b.addExecutable("mock_gen", "test/gen_types.zig");
-    mock_gen.setMainPkgPath(".");
-    const mock_gen_run = mock_gen.run();
+    const mock_gen = b.addExecutable(.{ .name = "mock_gen", .root_source_file = .{
+        .path = "test/gen_types.zig",
+    }, .target = target, .optimize = optimize });
+    //mock_gen.setMainPkgPath(".");
+    const mock_gen_run = b.addRunArtifact(mock_gen);
     unit_tests.step.dependOn(&mock_gen_run.step);
 
     // Create test FAT32 image
@@ -136,14 +159,14 @@ pub fn build(b: *Builder) !void {
     var qemu_args_al = ArrayList([]const u8).init(b.allocator);
     defer qemu_args_al.deinit();
 
-    switch (target.getCpuArch()) {
-        .i386 => try qemu_args_al.append("qemu-system-i386"),
+    switch (target.result.cpu.arch) {
+        .x86 => try qemu_args_al.append("qemu-system-i386"),
         else => unreachable,
     }
     try qemu_args_al.append("-serial");
     try qemu_args_al.append("stdio");
-    switch (target.getCpuArch()) {
-        .i386 => {
+    switch (target.result.cpu.arch) {
+        .x86 => {
             try qemu_args_al.append("-boot");
             try qemu_args_al.append("d");
             try qemu_args_al.append("-cdrom");
@@ -156,7 +179,7 @@ pub fn build(b: *Builder) !void {
         try qemu_args_al.append("none");
     }
 
-    var qemu_args = qemu_args_al.toOwnedSlice();
+    const qemu_args = qemu_args_al.toOwnedSlice();
 
     const rt_step = RuntimeStep.create(b, test_mode, qemu_args);
     rt_step.step.dependOn(&make_iso.step);
@@ -217,7 +240,7 @@ const Fat32BuilderStep = struct {
     ///     Fat32.Error     - If there was an error creating the FAT image. This will be invalid options.
     ///
     fn make(step: *Step) (error{EndOfStream} || File.OpenError || File.ReadError || File.WriteError || File.SeekError || Fat32.Error)!void {
-        const self = @fieldParentPtr(Fat32BuilderStep, "step", step);
+        const self = @as(Fat32BuilderStep, @fieldParentPtr("step", step));
         // Open the out file
         const image = try std.fs.cwd().createFile(self.out_file_path, .{ .read = true });
 
@@ -238,9 +261,13 @@ const Fat32BuilderStep = struct {
     ///     The FAT32 builder step pointer to add to the build process.
     ///
     pub fn create(builder: *Builder, options: Fat32.Options, out_file_path: []const u8) *Fat32BuilderStep {
+        const stepOptions = Builder.Step.StepOptions{
+            .name = "Fat32BuilderStep",
+        };
+
         const fat32_builder_step = builder.allocator.create(Fat32BuilderStep) catch unreachable;
         fat32_builder_step.* = .{
-            .step = Step.init(.custom, builder.fmt("Fat32BuilderStep", .{}), builder.allocator, make),
+            .step = Step.init(stepOptions),
             .builder = builder,
             .options = options,
             .out_file_path = out_file_path,
@@ -293,7 +320,7 @@ const RamdiskStep = struct {
 
         // First write the number of files/headers
         std.debug.assert(self.files.len < std.math.maxInt(Usize));
-        try ramdisk.writer().writeInt(Usize, @truncate(Usize, self.files.len), endian);
+        try ramdisk.writer().writeInt(Usize, @truncate(self.files.len), endian);
         var current_offset: usize = 0;
         for (self.files) |file_path| {
             // Open, and read the file. Can get the size from this as well
@@ -305,14 +332,14 @@ const RamdiskStep = struct {
             // Write the header and file content to the ramdisk
             // Name length
             std.debug.assert(file_path[file_name_index..].len < std.math.maxInt(Usize));
-            try ramdisk.writer().writeInt(Usize, @truncate(Usize, file_path[file_name_index..].len), endian);
+            try ramdisk.writer().writeInt(Usize, @truncate(file_path[file_name_index..].len), endian);
 
             // Name
             try ramdisk.writer().writeAll(file_path[file_name_index..]);
 
             // Length
             std.debug.assert(file_content.len < std.math.maxInt(Usize));
-            try ramdisk.writer().writeInt(Usize, @truncate(Usize, file_content.len), endian);
+            try ramdisk.writer().writeInt(Usize, @truncate(file_content.len), endian);
 
             // File contest
             try ramdisk.writer().writeAll(file_content);
@@ -333,7 +360,7 @@ const RamdiskStep = struct {
     ///     Errors for opening, reading and writing to and from files and for allocating memory.
     ///
     fn make(step: *Step) Error!void {
-        const self = @fieldParentPtr(RamdiskStep, "step", step);
+        const self = @as(RamdiskStep, @fieldParentPtr("step", step));
         switch (self.target.getCpuArch()) {
             .i386 => try writeRamdisk(u32, self),
             else => unreachable,

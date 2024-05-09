@@ -311,13 +311,13 @@ pub const Fat32 = struct {
 
         return switch (image_size) {
             0...35 * 512 - 1 => Error.TooSmall,
-            35 * 512...64 * MB - 1 => @intCast(u8, std.math.max(512, bytes_per_sector) / bytes_per_sector),
-            64 * MB...128 * MB - 1 => @intCast(u8, std.math.max(1024, bytes_per_sector) / bytes_per_sector),
-            128 * MB...256 * MB - 1 => @intCast(u8, std.math.max(2048, bytes_per_sector) / bytes_per_sector),
-            256 * MB...8 * GB - 1 => @intCast(u8, std.math.max(4096, bytes_per_sector) / bytes_per_sector),
-            8 * GB...16 * GB - 1 => @intCast(u8, std.math.max(8192, bytes_per_sector) / bytes_per_sector),
-            16 * GB...32 * GB - 1 => @intCast(u8, std.math.max(16384, bytes_per_sector) / bytes_per_sector),
-            32 * GB...2 * TB - 1 => @intCast(u8, std.math.max(32768, bytes_per_sector) / bytes_per_sector),
+            35 * 512...64 * MB - 1 => @as(u8, @max(512, bytes_per_sector) / bytes_per_sector),
+            64 * MB...128 * MB - 1 => @as(u8, @max(1024, bytes_per_sector) / bytes_per_sector),
+            128 * MB...256 * MB - 1 => @as(u8, @max(2048, bytes_per_sector) / bytes_per_sector),
+            256 * MB...8 * GB - 1 => @as(u8, @max(4096, bytes_per_sector) / bytes_per_sector),
+            8 * GB...16 * GB - 1 => @as(u8, @max(8192, bytes_per_sector) / bytes_per_sector),
+            16 * GB...32 * GB - 1 => @as(u8, @max(16384, bytes_per_sector) / bytes_per_sector),
+            32 * GB...2 * TB - 1 => @as(u8, @max(32768, bytes_per_sector) / bytes_per_sector),
             else => Error.TooLarge,
         };
     }
@@ -354,7 +354,7 @@ pub const Fat32 = struct {
     fn createSerialNumber() u32 {
         // TODO: Get the actual date. Currently there is no std lib for human readable date.
         const year = 2020;
-        const month = 09;
+        const month = 9;
         const day = 27;
         const hour = 13;
         const minute = 46;
@@ -541,14 +541,14 @@ pub const Fat32 = struct {
         }
 
         // See: https://board.flatassembler.net/topic.php?t=12680
-        var sectors_per_fat = @intCast(u32, (image_size - getReservedSectors() + (2 * options.cluster_size)) / ((options.cluster_size * (options.sector_size / 4)) + 2));
+        var sectors_per_fat = @as(u32, (image_size - getReservedSectors() + (2 * options.cluster_size)) / ((options.cluster_size * (options.sector_size / 4)) + 2));
         // round up sectors
         sectors_per_fat = (sectors_per_fat + options.sector_size - 1) / options.sector_size;
 
         return Header{
             .bytes_per_sector = options.sector_size,
             .sectors_per_cluster = options.cluster_size,
-            .total_sectors = @intCast(u32, @divExact(image_size, options.sector_size)),
+            .total_sectors = @as(u32, @divExact(image_size, options.sector_size)),
             .sectors_per_fat = sectors_per_fat,
             .serial_number = createSerialNumber(),
             .volume_label = options.volume_name,

@@ -105,7 +105,7 @@ pub const FreeListAllocator = struct {
     fn free(self: *Self, mem: []u8, alignment: u29, ret_addr: usize) void {
         _ = alignment;
         _ = ret_addr;
-        const size = std.math.max(mem.len, @sizeOf(Header));
+        const size = @max(mem.len, @sizeOf(Header));
         const addr = @ptrToInt(mem.ptr);
         var header = insertFreeHeader(addr, size - @sizeOf(Header), null);
         if (self.first_free) |first| {
@@ -324,7 +324,7 @@ pub const FreeListAllocator = struct {
 
         // Get the real size being allocated, which is the aligned size or the size of a header (whichever is largest)
         // The size must be at least the size of a header so that it can be freed properly
-        const real_size = std.math.max(if (size_alignment > 1) std.mem.alignAllocLen(size, size, size_alignment) else size, @sizeOf(Header));
+        const real_size = @max(if (size_alignment > 1) std.mem.alignAllocLen(size, size, size_alignment) else size, @sizeOf(Header));
 
         var free_header = self.first_free;
         var prev: ?*Header = null;

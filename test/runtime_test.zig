@@ -2,9 +2,9 @@ const std = @import("std");
 const ChildProcess = std.ChildProcess;
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
-const Builder = std.build.Builder;
-const Step = std.build.Step;
-const Queue = std.atomic.Queue([]const u8);
+const Build = std.Build;
+const Step = Build.Step;
+const Queue = std.Queue4([]const u8);
 const Node = std.TailQueue([]const u8).Node;
 
 // Creating a new runtime test:
@@ -56,16 +56,16 @@ pub const TestMode = enum {
 /// The runtime step for running the runtime tests for the OS.
 pub const RuntimeStep = struct {
     /// The Step, that is all you need to know
-    step: Step,
+    step: std.Build.Step,
 
     /// The builder pointer, also all you need to know
-    builder: *Builder,
+    builder: *std.Build,
 
     /// The message queue that stores the log lines
     msg_queue: Queue,
 
     /// The qemu process, this is needed for the `read_logs` thread.
-    os_proc: *ChildProcess,
+    os_proc: *std.ChildProcess,
 
     /// The argv of the qemu process so can create the qemu process
     argv: [][]const u8,
@@ -219,7 +219,7 @@ pub const RuntimeStep = struct {
     ///     Error.TestFailed            - The error if the test failed.
     ///
     fn make(step: *Step) (Thread.SpawnError || ChildProcess.SpawnError || Allocator.Error || Error)!void {
-        const self = @fieldParentPtr(RuntimeStep, "step", step);
+        const self = @as(RuntimeStep, @fieldParentPtr("step", step));
 
         // Create the qemu process
         self.os_proc = try ChildProcess.init(self.argv, self.builder.allocator);
@@ -280,7 +280,7 @@ pub const RuntimeStep = struct {
             };
 
             // put line in the queue
-            var node = self.builder.allocator.create(Node) catch unreachable;
+            const node = self.builder.allocator.create(Node) catch unreachable;
             node.* = .{ .next = null, .data = line };
             self.msg_queue.put(node);
         }
@@ -322,7 +322,7 @@ pub const RuntimeStep = struct {
     /// Return: *RuntimeStep
     ///     The Runtime step pointer to add to the build process.
     ///
-    pub fn create(builder: *Builder, test_mode: TestMode, qemu_args: [][]const u8) *RuntimeStep {
+    pub fn create(builder: *Build, test_mode: TestMode, qemu_args: [][]const u8) *RuntimeStep {
         const runtime_step = builder.allocator.create(RuntimeStep) catch unreachable;
         runtime_step.* = RuntimeStep{
             .step = Step.init(.custom, builder.fmt("Runtime {s}", .{@tagName(test_mode)}), builder.allocator, make),

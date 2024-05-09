@@ -410,7 +410,7 @@ pub fn initMem(mb_info: BootPayload) Allocator.Error!MemProfile {
 
     // Reserve the unavailable sections from the multiboot memory map
     for (mem_map) |entry| {
-        if (entry.@"type" != multiboot.MULTIBOOT_MEMORY_AVAILABLE) {
+        if (entry.type != multiboot.MULTIBOOT_MEMORY_AVAILABLE) {
             // If addr + len is greater than maxInt(usize) just ignore whatever comes after maxInt(usize) since it can't be addressed anyway
             const end: usize = if (entry.addr > std.math.maxInt(usize) - entry.len) std.math.maxInt(usize) else @intCast(usize, entry.addr + entry.len);
             try reserved_physical_mem.append(.{
